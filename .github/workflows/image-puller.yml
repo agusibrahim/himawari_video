@@ -2,7 +2,7 @@ name: 🛰️ Buat Video Satelit Harian
 
 on:
   schedule:
-    - cron: '0,30 * * * *'
+    - cron: '0,20 * * * *'
   workflow_dispatch:
 
 jobs:
@@ -17,69 +17,93 @@ jobs:
 
       - name: ⚙️ Siapkan Lingkungan
         run: |
+          echo "Menginstall FFmpeg via apt..."
           sudo apt-get update && sudo apt-get install -y ffmpeg
-          mkdir -p images/daily media
+          
+          echo "Membuat direktori kerja..."
+          mkdir -p images/daily media weekly
 
-      - name: 📥 Unduh & Cek Duplikasi Gambar
-        id: download_image
+      - name: 📥 Unduh, Arsipkan, dan Buat Video Saat Ini (GMT+7)
+        id: process_current
         run: |
           IMAGE_URL="https://inderaja.bmkg.go.id/IMAGE/HIMA/H08_EH_Indonesia.png"
           TEMP_FILE="images/daily/latest_temp.png"
           
+          # Unduh gambar terbaru ke file sementara
           curl --silent --location --output "$TEMP_FILE" "$IMAGE_URL"
           
+          # Validasi ukuran file
           NEW_SIZE=$(stat -c%s "$TEMP_FILE")
           if [[ "$NEW_SIZE" -lt 10000 ]]; then
-            echo "❌ Unduhan gagal atau file tidak valid (ukuran: $NEW_SIZE bytes). Membatalkan."
+            echo "❌ Unduhan gagal atau file tidak valid. Membatalkan."
             rm "$TEMP_FILE"
             exit 0
           fi
 
+          # Bandingkan dengan file terakhir untuk hindari duplikat
           LAST_FILE=$(find images/daily -type f -name "*.png" -not -name "latest_temp.png" | sort -r | head -n 1)
-
           if [[ -f "$LAST_FILE" ]]; then
             OLD_SIZE=$(stat -c%s "$LAST_FILE")
-            echo "Ukuran file baru: $NEW_SIZE bytes. Ukuran file sebelumnya ($LAST_FILE): $OLD_SIZE bytes."
-            
             if [[ "$NEW_SIZE" == "$OLD_SIZE" ]]; then
-              echo "🤚 Gambar belum diperbarui (ukuran file sama). Menghapus file sementara."
+              echo "🤚 Gambar belum diperbarui (ukuran file sama). Tidak ada tindakan."
               rm "$TEMP_FILE"
               exit 0
             fi
           fi
 
-          FINAL_FILENAME="images/daily/$(date -u +"%Y-%m-%d_%H-%M").png"
-          echo "✅ Gambar baru terdeteksi. Menyimpan sebagai $FINAL_FILENAME."
+          # --- Proses Gambar Baru (Menggunakan Zona Waktu GMT+7) ---
+          TODAY_STR=$(TZ="Asia/Jakarta" date +"%Y-%m-%d")
+          FINAL_FILENAME="images/daily/$(TZ="Asia/Jakarta" date +"%Y-%m-%d_%H-%M").png"
+          echo "✅ Gambar baru terdeteksi. Menyimpan sebagai $FINAL_FILENAME (Waktu GMT+7)."
           mv "$TEMP_FILE" "$FINAL_FILENAME"
 
-      - name: 🎬 Proses Video dan Bersihkan Gambar Lama
+          # 1. Salin ke folder arsip mingguan
+          WEEKLY_DIR="weekly/$TODAY_STR"
+          mkdir -p "$WEEKLY_DIR"
+          cp "$FINAL_FILENAME" "$WEEKLY_DIR/"
+          echo "📂 Gambar diarsipkan ke $WEEKLY_DIR"
+
+          # 2. Buat/Perbarui video harian saat ini (current_video.mp4)
+          IMAGE_COUNT_TODAY=$(find images/daily -name "${TODAY_STR}_*.png" | wc -l)
+          if [[ $IMAGE_COUNT_TODAY -ge 2 ]]; then
+            echo "🎥 Memperbarui current_video.mp4 dengan $IMAGE_COUNT_TODAY gambar..."
+            ffmpeg -y -framerate 10 -pattern_type glob -i "images/daily/${TODAY_STR}_*.png" -c:v libx264 -pix_fmt yuv420p current_video.mp4
+          else
+            echo "🔎 Baru ada $IMAGE_COUNT_TODAY gambar, minimal 2 untuk membuat video."
+          fi
+
+      - name: 🎬 Buat Video Final Harian & Bersihkan (GMT+7)
         run: |
-          YESTERDAY=$(date -u -d "yesterday" +"%Y-%m-%d")
+          # Dapatkan tanggal kemarin berdasarkan zona waktu GMT+7
+          YESTERDAY=$(TZ="Asia/Jakarta" date -d "yesterday" +"%Y-%m-%d")
           VIDEO_FILE="media/${YESTERDAY}.mp4"
 
+          # Hanya proses jika video final untuk kemarin belum ada
           if [[ -f "$VIDEO_FILE" ]]; then
-            echo "✅ Video untuk tanggal $YESTERDAY sudah ada. Tidak ada proses lebih lanjut."
+            echo "✅ Video final untuk tanggal $YESTERDAY sudah ada."
             exit 0
           fi
           
           IMAGE_COUNT=$(find images/daily -name "${YESTERDAY}_*.png" 2>/dev/null | wc -l)
           
           if [[ $IMAGE_COUNT -gt 5 ]]; then
-            echo "🎬 Menemukan $IMAGE_COUNT gambar untuk tanggal $YESTERDAY. Membuat video..."
+            echo "🎬 Menemukan $IMAGE_COUNT gambar untuk tanggal $YESTERDAY. Membuat video final..."
             ffmpeg -framerate 10 -pattern_type glob -i "images/daily/${YESTERDAY}_*.png" -c:v libx264 -pix_fmt yuv420p "$VIDEO_FILE"
-            echo "✅ Video berhasil dibuat: $VIDEO_FILE"
-            echo "🧹 Membersihkan file gambar PNG untuk tanggal $YESTERDAY..."
+            
+            echo "✅ Video final berhasil dibuat: $VIDEO_FILE"
+            
+            echo "🧹 Membersihkan file gambar harian dari 'images/daily' untuk tanggal $YESTERDAY..."
             rm images/daily/${YESTERDAY}_*.png
+            echo "Pembersihan selesai. Arsip tetap ada di folder 'weekly'."
           else
-            echo "🔎 Tidak cukup gambar ($IMAGE_COUNT) untuk membuat video tanggal $YESTERDAY."
+            echo "🔎 Tidak cukup gambar ($IMAGE_COUNT) untuk membuat video final tanggal $YESTERDAY."
           fi
 
       - name: 💾 Commit Perubahan ke Repositori
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: "feat(satelit): Tambah data gambar & video terbaru"
-          # PERUBAHAN DI SINI: Menggunakan nama direktori, bukan pola file spesifik
-          file_pattern: 'images media'
+          commit_message: "feat(satelit): Update data gambar dan video"
+          file_pattern: 'images media weekly current_video.mp4'
           commit_user_name: GitHub Actions Bot
           commit_user_email: actions@github.com
           commit_author: GitHub Actions Bot <actions@github.com>
