@@ -2,7 +2,7 @@ name: 🛰️ Buat Video Satelit Harian
 
 on:
   schedule:
-    - cron: '0,20 * * * *'
+    - cron: '0,30 * * * *'
   workflow_dispatch:
 
 jobs:
@@ -26,21 +26,17 @@ jobs:
           IMAGE_URL="https://inderaja.bmkg.go.id/IMAGE/HIMA/H08_EH_Indonesia.png"
           TEMP_FILE="images/daily/latest_temp.png"
           
-          # Unduh gambar terbaru ke file sementara
           curl --silent --location --output "$TEMP_FILE" "$IMAGE_URL"
           
-          # Dapatkan ukuran file baru. Jika unduhan gagal, ukuran akan 0.
           NEW_SIZE=$(stat -c%s "$TEMP_FILE")
-          if [[ "$NEW_SIZE" -lt 10000 ]]; then # Ukuran minimal (misal 10KB) untuk dianggap valid
+          if [[ "$NEW_SIZE" -lt 10000 ]]; then
             echo "❌ Unduhan gagal atau file tidak valid (ukuran: $NEW_SIZE bytes). Membatalkan."
             rm "$TEMP_FILE"
             exit 0
           fi
 
-          # Cari file terakhir yang sudah ada di direktori
           LAST_FILE=$(find images/daily -type f -name "*.png" -not -name "latest_temp.png" | sort -r | head -n 1)
 
-          # Jika ada file sebelumnya, bandingkan ukurannya
           if [[ -f "$LAST_FILE" ]]; then
             OLD_SIZE=$(stat -c%s "$LAST_FILE")
             echo "Ukuran file baru: $NEW_SIZE bytes. Ukuran file sebelumnya ($LAST_FILE): $OLD_SIZE bytes."
@@ -52,7 +48,6 @@ jobs:
             fi
           fi
 
-          # Jika gambar baru, ganti nama file sementara ke nama file final dengan timestamp
           FINAL_FILENAME="images/daily/$(date -u +"%Y-%m-%d_%H-%M").png"
           echo "✅ Gambar baru terdeteksi. Menyimpan sebagai $FINAL_FILENAME."
           mv "$TEMP_FILE" "$FINAL_FILENAME"
@@ -83,7 +78,8 @@ jobs:
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
           commit_message: "feat(satelit): Tambah data gambar & video terbaru"
-          file_pattern: 'images/daily/*.png media/*.mp4'
+          # PERUBAHAN DI SINI: Menggunakan nama direktori, bukan pola file spesifik
+          file_pattern: 'images media'
           commit_user_name: GitHub Actions Bot
           commit_user_email: actions@github.com
           commit_author: GitHub Actions Bot <actions@github.com>
